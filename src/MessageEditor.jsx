@@ -9,9 +9,6 @@ import {
   User,
   Cpu,
   Wrench,
-  SlidersHorizontal,
-  AlertTriangle,
-  Settings as SettingsIcon,
   Upload,
 } from 'lucide-react'
 import ImportMessagesModal from './ImportMessagesModal'
@@ -69,10 +66,10 @@ function MessageRow({ msg, index, onChange, onDelete }) {
         </div>
       </div>
       <textarea
-        value={msg.content}
-        onChange={(e) => onChange(index, { ...msg, content: e.target.value })}
+        value={msg.data?.content || ''}
+        onChange={(e) => onChange(index, { ...msg, data: { ...msg.data, content: e.target.value } })}
         placeholder={`Enter ${meta.label.toLowerCase()} message content...`}
-        rows={Math.min(8, Math.max(2, msg.content.split('\n').length + 1))}
+        rows={Math.min(8, Math.max(2, (msg.data?.content || '').split('\n').length + 1))}
         className={`w-full px-2.5 py-2 text-xs font-mono leading-relaxed text-[var(--text-main)] bg-transparent focus:outline-none ${style.ring} resize-y border-0`}
       />
       {isTool && (
@@ -82,8 +79,8 @@ function MessageRow({ msg, index, onChange, onDelete }) {
               name
             </label>
             <input
-              value={msg.name || ''}
-              onChange={(e) => onChange(index, { ...msg, name: e.target.value })}
+              value={msg.data?.name || ''}
+              onChange={(e) => onChange(index, { ...msg, data: { ...msg.data, name: e.target.value } })}
               placeholder="tool name"
               className="w-full bg-white border border-[var(--border-color)] rounded px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-amber-400"
             />
@@ -93,21 +90,21 @@ function MessageRow({ msg, index, onChange, onDelete }) {
               tool_call_id
             </label>
             <input
-              value={msg.tool_call_id || ''}
-              onChange={(e) => onChange(index, { ...msg, tool_call_id: e.target.value })}
+              value={msg.data?.tool_call_id || ''}
+              onChange={(e) => onChange(index, { ...msg, data: { ...msg.data, tool_call_id: e.target.value } })}
               placeholder="tool_call_id (required for ToolMessage)"
               className="w-full bg-white border border-[var(--border-color)] rounded px-2 py-1 text-[11px] font-mono focus:outline-none focus:border-amber-400"
             />
           </div>
         </div>
       )}
-      {msg.type === 'ai' && msg.tool_calls && msg.tool_calls.length > 0 && (
+      {msg.type === 'ai' && msg.data?.tool_calls?.length > 0 && (
         <div className="px-2.5 pb-2 bg-white/70 border-t border-[var(--border-color)]">
           <div className="text-[10px] text-[var(--text-muted)] mt-1.5 mb-1 font-medium uppercase tracking-wide">
-            Tool calls ({msg.tool_calls.length})
+            Tool calls ({msg.data.tool_calls.length})
           </div>
           <div className="space-y-1">
-            {msg.tool_calls.map((tc, i) => (
+            {msg.data.tool_calls.map((tc, i) => (
               <div
                 key={i}
                 className="text-[11px] font-mono bg-amber-50/60 border border-amber-200 rounded px-2 py-1"
@@ -135,13 +132,10 @@ export default function MessageEditor({
   setPromptName,
   messages,
   setMessages,
-  params,
-  setParams,
   onSend,
   loading,
   hasApiKey,
   hasPrompt,
-  onOpenSettings,
   dirty,
   onSave,
   promptTools,
@@ -149,7 +143,7 @@ export default function MessageEditor({
 }) {
   const update = (i, msg) => setMessages(messages.map((m, idx) => (idx === i ? msg : m)))
   const remove = (i) => setMessages(messages.filter((_, idx) => idx !== i))
-  const add = (type) => setMessages([...messages, { type, content: '' }])
+  const add = (type) => setMessages([...messages, { type, data: { content: '' } }])
 
   const [importOpen, setImportOpen] = useState(false)
   const [toolsOpen, setToolsOpen] = useState(false)
@@ -158,7 +152,7 @@ export default function MessageEditor({
   const canSend =
     !loading &&
     hasApiKey &&
-    messages.some((m) => (m.content || '').trim().length > 0)
+    messages.some((m) => (m.data?.content || '').trim().length > 0)
 
   return (
     <section className="flex-1 flex flex-col min-w-0 min-h-0 bg-[var(--bg-main)]">
@@ -226,51 +220,9 @@ export default function MessageEditor({
         </button>
       </div>
 
-      {/* Params + send */}
+      {/* Send bar */}
       <div className="px-4 py-2.5 border-t border-[var(--border-color)] bg-[var(--bg-panel)] shrink-0">
-        <div className="flex items-center gap-4 mb-2">
-          <div className="flex items-center gap-1.5 text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider">
-            <SlidersHorizontal className="w-3.5 h-3.5" /> Params
-          </div>
-          <div className="flex-1 flex items-center gap-2 min-w-[140px]">
-            <span className="text-[11px] text-[var(--text-muted)] w-16 shrink-0">
-              Temp <span className="font-mono text-[var(--text-main)]">{params.temperature.toFixed(2)}</span>
-            </span>
-            <input
-              type="range"
-              min="0"
-              max="2"
-              step="0.05"
-              value={params.temperature}
-              onChange={(e) => setParams((p) => ({ ...p, temperature: parseFloat(e.target.value) }))}
-              className="flex-1 accent-[var(--accent)] cursor-pointer"
-            />
-          </div>
-          <div className="flex-1 flex items-center gap-2 min-w-[140px]">
-            <span className="text-[11px] text-[var(--text-muted)] w-20 shrink-0">
-              MaxTokens <span className="font-mono text-[var(--text-main)]">{params.max_tokens}</span>
-            </span>
-            <input
-              type="range"
-              min="256"
-              max="8192"
-              step="256"
-              value={params.max_tokens}
-              onChange={(e) => setParams((p) => ({ ...p, max_tokens: parseInt(e.target.value, 10) }))}
-              className="flex-1 accent-[var(--accent)] cursor-pointer"
-            />
-          </div>
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          {!hasApiKey ? (
-            <button onClick={onOpenSettings} className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 px-2 py-1 rounded flex items-center gap-1.5 cursor-pointer hover:bg-amber-100">
-              <AlertTriangle className="w-3.5 h-3.5" /> DeepSeek API key not set — click to configure
-            </button>
-          ) : (
-            <button onClick={onOpenSettings} className="text-[11px] text-[var(--text-muted)] hover:text-[var(--text-main)] flex items-center gap-1.5 cursor-pointer">
-              <SettingsIcon className="w-3.5 h-3.5" /> Model settings
-            </button>
-          )}
+        <div className="flex items-center justify-end gap-2">
           <div className="flex items-center gap-2">
             <button
               onClick={() => setToolsOpen(true)}

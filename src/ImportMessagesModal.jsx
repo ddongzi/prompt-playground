@@ -79,7 +79,7 @@ export default function ImportMessagesModal({ isOpen, onClose, onImport }) {
             <div className="text-[11px] text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-2.5 py-1.5">
               <b>OK</b> — {parsed.messages.length} message{parsed.messages.length === 1 ? '' : 's'}:{' '}
               {parsed.messages
-                .map((m) => `${TYPE_LABEL[m.type] || m.type}(${m.content.length})`)
+                .map((m) => `${TYPE_LABEL[m.type] || m.type}(${(m.data?.content || '').length})`)
                 .join(' → ')}
             </div>
           ) : (

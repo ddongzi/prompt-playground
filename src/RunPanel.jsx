@@ -283,10 +283,6 @@ export default function RunPanel({
                 <Cpu className="w-3 h-3" /> <span className="font-mono">{params.model}</span>
               </span>
             )}
-            {typeof params.temperature === 'number' && (
-              <span className="font-mono">T={params.temperature}</span>
-            )}
-            {params.max_tokens && <span className="font-mono">max={params.max_tokens}</span>}
             {usage && <span className="font-mono">{formatTokens(usage)}</span>}
           </div>
         )}
@@ -347,9 +343,9 @@ export default function RunPanel({
                 {run.input_messages.map((m, i) => (
                   <div key={i} className="text-[11px] font-mono bg-[var(--bg-soft)] border border-[var(--border-color)] rounded p-2">
                     <span className="font-semibold text-[var(--text-muted)] uppercase">{m.type}: </span>
-                    <span className="whitespace-pre-wrap">{m.content}</span>
-                    {m.tool_call_id && (
-                      <span className="ml-1 text-[var(--text-faint)]">(tool_call_id={m.tool_call_id})</span>
+                    <span className="whitespace-pre-wrap">{m.data?.content || ''}</span>
+                    {m.data?.tool_call_id && (
+                      <span className="ml-1 text-[var(--text-faint)]">(tool_call_id={m.data.tool_call_id})</span>
                     )}
                   </div>
                 ))}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Zap, Plus, Settings as SettingsIcon, RotateCw, AlertCircle, Database } from 'lucide-react'
+import { Zap, Settings as SettingsIcon, RotateCw, AlertCircle, Database } from 'lucide-react'
 import * as store from './store'
 import { streamChat, runWithTools } from './llm'
 import Sidebar from './Sidebar'
@@ -8,7 +8,7 @@ import RunPanel from './RunPanel'
 import SettingsModal from './SettingsModal'
 import DataModal from './DataModal'
 
-const EMPTY_MESSAGE = { type: 'human', content: '' }
+const EMPTY_MESSAGE = { type: 'human', data: { content: '' } }
 
 // Canonical form of a message list for dirty comparison:
 // drop undefined tool_call_id on non-tool messages so switching types
@@ -16,8 +16,10 @@ const EMPTY_MESSAGE = { type: 'human', content: '' }
 function normMessages(msgs) {
   return JSON.stringify(
     (msgs || []).map((m) => {
-      const out = { type: m.type, content: m.content || '' }
-      if (m.type === 'tool' && m.tool_call_id) out.tool_call_id = m.tool_call_id
+      const d = m.data || {}
+      const out = { type: m.type, content: d.content || '' }
+      if (m.type === 'tool' && d.tool_call_id) out.tool_call_id = d.tool_call_id
+      if (m.type === 'ai' && d.tool_calls?.length) out.tool_calls = d.tool_calls
       return out
     })
   )
@@ -36,7 +38,6 @@ export default function App() {
   // Editor state
   const [promptName, setPromptName] = useState('')
   const [messages, setMessages] = useState([EMPTY_MESSAGE])
-  const [params, setParams] = useState({ temperature: 0, max_tokens: 2048 })
   // Tool config bound at run time: { selected: string[], mocks: {[name]: string} }
   const [promptTools, setPromptTools] = useState({ selected: [], mocks: {} })
   // Snapshot of the saved prompt (for dirty comparison)
@@ -62,7 +63,7 @@ export default function App() {
       try {
         const s = store.getSettings()
         setSettings(s)
-        setParams({ temperature: s.temperature ?? 0, max_tokens: s.max_tokens ?? 2048 })
+        await store.seedDefaultTools()
         const g = await store.listGroups()
         setGroups(g)
         if (g.length > 0) setSelectedGroupId(g[0].id)
@@ -94,10 +95,6 @@ export default function App() {
         setSelectedPromptId(id)
         setPromptName(p.name || '')
         setMessages(p.messages?.length ? p.messages : [EMPTY_MESSAGE])
-        setParams({
-          temperature: p.params?.temperature ?? settings?.temperature ?? 0,
-          max_tokens: p.params?.max_tokens ?? settings?.max_tokens ?? 2048,
-        })
         setPromptTools({
           selected: p.tools?.selected || [],
           mocks: p.tools?.mocks || {},
@@ -105,7 +102,6 @@ export default function App() {
         setSavedSnapshot({
           name: p.name || '',
           messages: normMessages(p.messages || []),
-          params: JSON.stringify(p.params || {}),
           tools: JSON.stringify({
             selected: p.tools?.selected || [],
             mocks: p.tools?.mocks || {},
@@ -146,11 +142,7 @@ export default function App() {
     setSelectedRunId(null)
     setRuns([])
     setPromptName('')
-    setMessages([{ type: 'system', content: '' }, { ...EMPTY_MESSAGE }])
-    setParams({
-      temperature: settings?.temperature ?? 0,
-      max_tokens: settings?.max_tokens ?? 2048,
-    })
+    setMessages([{ type: 'system', data: { content: '' } }, { ...EMPTY_MESSAGE }])
     setPromptTools({ selected: [], mocks: {} })
     setSavedSnapshot(null)
     setStreamingOutput('')
@@ -162,9 +154,6 @@ export default function App() {
     if (!savedSnapshot) return true
     if ((promptName || '') !== savedSnapshot.name) return true
     if (normMessages(messages) !== savedSnapshot.messages) return true
-    const savedP = JSON.parse(savedSnapshot.params || '{}')
-    if (savedP.temperature !== undefined && savedP.temperature !== params.temperature) return true
-    if (savedP.max_tokens !== undefined && savedP.max_tokens !== params.max_tokens) return true
     const savedT = savedSnapshot.tools
     if (savedT !== undefined) {
       const currentT = JSON.stringify({
@@ -174,7 +163,7 @@ export default function App() {
       if (currentT !== savedT) return true
     }
     return false
-  }, [promptName, messages, params, savedSnapshot, promptTools])
+  }, [promptName, messages, savedSnapshot, promptTools])
 
   // ---------- groups CRUD ----------
   const handleCreateGroup = useCallback(
@@ -213,12 +202,7 @@ export default function App() {
   // a run can be attached to it. Returns the prompt id, or null on failure.
   const persistPrompt = useCallback(async () => {
     const cleanedMessages = messages
-      .map((m) => ({
-        type: m.type,
-        content: m.content || '',
-        ...(m.type === 'tool' && m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-      }))
-      .filter((m) => m.content.trim() !== '' || m.type === 'tool')
+      .filter((m) => (m.data?.content || '').trim() !== '' || m.type === 'tool')
     if (cleanedMessages.length === 0) {
       showToast('Add at least one non-empty message.', 'error')
       return null
@@ -238,14 +222,12 @@ export default function App() {
         const updated = await store.updatePrompt(selectedPromptId, {
           name: promptName.trim(),
           messages: cleanedMessages,
-          params,
           tools: promptTools,
         })
         setPrompts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)))
         setSavedSnapshot({
           name: updated.name,
           messages: normMessages(updated.messages || []),
-          params: JSON.stringify(updated.params || {}),
           tools: JSON.stringify({
             selected: updated.tools?.selected || [],
             mocks: updated.tools?.mocks || {},
@@ -257,7 +239,6 @@ export default function App() {
         group_id: selectedGroupId,
         name: promptName.trim(),
         messages: cleanedMessages,
-        params,
         tools: promptTools,
       })
       setPrompts((prev) => [created, ...prev])
@@ -265,7 +246,6 @@ export default function App() {
       setSavedSnapshot({
         name: created.name,
         messages: normMessages(created.messages || []),
-        params: JSON.stringify(created.params || {}),
         tools: JSON.stringify({
           selected: created.tools?.selected || [],
           mocks: created.tools?.mocks || {},
@@ -276,12 +256,12 @@ export default function App() {
       showToast(err.message, 'error')
       return null
     }
-  }, [messages, promptName, selectedGroupId, selectedPromptId, params, promptTools, dirty, showToast])
+  }, [messages, promptName, selectedGroupId, selectedPromptId, promptTools, dirty, showToast])
 
   // Auto-name for runs: first user message, truncated.
   const runNameFrom = useCallback((msgs) => {
-    const u = msgs.find((m) => m.type === 'user')
-    const text = (u?.content || '').trim()
+    const u = msgs.find((m) => m.type === 'human' || m.type === 'user')
+    const text = (u?.data?.content || '').trim()
     return text ? text.slice(0, 40) + (text.length > 40 ? '…' : '') : ''
   }, [])
 
@@ -348,12 +328,7 @@ export default function App() {
   // ---------- chat (streaming) ----------
   const handleSend = useCallback(async () => {
     const cleaned = messages
-      .map((m) => ({
-        type: m.type,
-        content: m.content || '',
-        ...(m.type === 'tool' && m.tool_call_id ? { tool_call_id: m.tool_call_id } : {}),
-      }))
-      .filter((m) => m.content.trim() !== '' || m.type === 'tool')
+      .filter((m) => (m.data?.content || '').trim() !== '' || m.type === 'tool')
     if (cleaned.length === 0) {
       showToast('Add at least one non-empty message.', 'error')
       return
@@ -380,7 +355,6 @@ export default function App() {
         const result = await runWithTools(
           cleaned,
           settings,
-          params,
           selectedTools,
           promptTools.mocks || {},
           (status) => setStreamingOutput((prev) => prev + status + '\n')
@@ -393,7 +367,6 @@ export default function App() {
         }
         const name = runNameFrom(cleaned)
         const run = await store.createRun(promptId, cleaned, output, {
-          ...params,
           model: settings.model,
           tools: selectedTools,
         }, name)
@@ -404,7 +377,7 @@ export default function App() {
         // ---- plain streaming chat ----
         let acc = ''
         let usage = null
-        for await (const evt of streamChat(cleaned, settings, params)) {
+        for await (const evt of streamChat(cleaned, settings)) {
           if (evt.type === 'token') {
             acc += evt.delta
             setStreamingOutput(acc)
@@ -422,7 +395,6 @@ export default function App() {
         if (usage) output.usage = usage
         const name = runNameFrom(cleaned)
         const run = await store.createRun(promptId, cleaned, output, {
-          ...params,
           model: settings.model,
         }, name)
         setRuns((prev) => [run, ...prev])
@@ -434,19 +406,13 @@ export default function App() {
     } finally {
       setIsStreaming(false)
     }
-  }, [messages, params, settings, promptTools, persistPrompt, showToast])
+  }, [messages, settings, promptTools, persistPrompt, showToast])
 
   // ---------- settings ----------
   const handleSaveSettings = useCallback(
     async (payload) => {
       const saved = store.saveSettings(payload)
       setSettings(saved)
-      if (payload.temperature !== undefined || payload.max_tokens !== undefined) {
-        setParams((p) => ({
-          temperature: payload.temperature ?? p.temperature,
-          max_tokens: payload.max_tokens ?? p.max_tokens,
-        }))
-      }
       showToast('Settings saved.', 'success')
     },
     [showToast]
@@ -510,14 +476,6 @@ export default function App() {
         </div>
 
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleNewPrompt}
-            disabled={!selectedGroupId}
-            className="btn btn-outline"
-            title={selectedGroupId ? 'New prompt in current group' : 'Select a group first'}
-          >
-            <Plus className="w-3.5 h-3.5" /> New prompt
-          </button>
           <button onClick={() => refreshPrompts()} className="btn btn-ghost" title="Refresh">
             <RotateCw className="w-3.5 h-3.5" />
           </button>
@@ -560,15 +518,12 @@ export default function App() {
           setPromptName={setPromptName}
           messages={messages}
           setMessages={setMessages}
-          params={params}
-          setParams={setParams}
           onSend={handleSend}
           loading={isStreaming}
           hasApiKey={hasApiKey}
           hasPrompt={!!selectedPromptId}
           dirty={dirty}
           onSave={handleSave}
-          onOpenSettings={() => setIsSettingsOpen(true)}
           promptTools={promptTools}
           setPromptTools={setPromptTools}
         />

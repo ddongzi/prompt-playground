@@ -23,13 +23,29 @@ const TYPE_MAP = {
   tool: ToolMessage,
 }
 
+// All messages use the native LangChain-serialised shape:
+//   { type, data: { content, tool_calls?, tool_call_id?, name?, ... } }
+// No flattening — the data wrapper is preserved everywhere.
+
+// Read content from the data wrapper.
+function msgContent(m) {
+  return (m?.data?.content ?? '')
+}
+
 // Convert stored message dicts into LangChain BaseMessage instances.
 // Orphan tool messages (no preceding AI with matching tool_call_id) are skipped.
 export function buildMessages(msgs) {
   return (msgs || [])
-    .filter((m) => (m.content || '').trim() !== '' || m.type === 'tool' || (m.type === 'ai' && m.tool_calls))
+    .filter((m) => {
+      const c = msgContent(m).trim()
+      if (c !== '') return true
+      if (m.type === 'tool') return true
+      if (m.type === 'ai' && m.data?.tool_calls?.length) return true
+      return false
+    })
     .reduce((acc, m) => {
       const t = (m.type || 'human').toLowerCase()
+      const d = m.data || {}
       if (t === 'tool') {
         // Only keep if the immediately preceding AI message has a matching tool_call id.
         const prev = acc[acc.length - 1]
@@ -37,22 +53,22 @@ export function buildMessages(msgs) {
           prev &&
           prev.constructor?.name === 'AIMessage' &&
           Array.isArray(prev.tool_calls) &&
-          prev.tool_calls.some((tc) => tc.id === m.tool_call_id)
+          prev.tool_calls.some((tc) => tc.id === d.tool_call_id)
         ) {
           acc.push(new ToolMessage({
-            content: m.content || '',
-            tool_call_id: m.tool_call_id || '',
-            name: m.name || undefined,
+            content: d.content || '',
+            tool_call_id: d.tool_call_id || '',
+            name: d.name || undefined,
           }))
         }
         // else: orphan tool message — skip it silently.
         return acc
       }
       const cls = TYPE_MAP[t] || HumanMessage
-      if (cls === AIMessage && m.tool_calls && m.tool_calls.length) {
+      if (cls === AIMessage && d.tool_calls?.length) {
         acc.push(new AIMessage({
-          content: m.content || '',
-          tool_calls: m.tool_calls.map((tc) => ({
+          content: d.content || '',
+          tool_calls: d.tool_calls.map((tc) => ({
             name: tc.name || '',
             args: tc.args ?? {},
             id: tc.id || '',
@@ -61,17 +77,16 @@ export function buildMessages(msgs) {
         }))
         return acc
       }
-      acc.push(new cls({ content: m.content || '' }))
+      acc.push(new cls({ content: d.content || '' }))
       return acc
     }, [])
 }
 
-function createModel(settings, params) {
+function createModel(settings) {
   const opts = {
     apiKey: settings.api_key,
     model: settings.model,
-    temperature: params?.temperature ?? settings.temperature,
-    maxTokens: params?.max_tokens ?? settings.max_tokens,
+    temperature: 0,
     streaming: true,
     streamUsage: true,
   }
@@ -93,7 +108,7 @@ function extractDelta(content) {
 
 // Async generator yielding events:
 //   { type: 'token', delta } | { type: 'usage', usage } | { type: 'done' } | { type: 'error', message }
-export async function* streamChat(messages, settings, params) {
+export async function* streamChat(messages, settings) {
   if (!settings?.api_key) {
     yield {
       type: 'error',
@@ -109,7 +124,7 @@ export async function* streamChat(messages, settings, params) {
 
   let model
   try {
-    model = createModel(settings, params)
+    model = createModel(settings)
   } catch (e) {
     yield { type: 'error', message: `Failed to initialise model: ${e.message}` }
     return
@@ -144,7 +159,7 @@ export async function* streamChat(messages, settings, params) {
 // onStatus: (msg: string) => void  — live progress updates
 //
 // Returns the native AIMessage (serialized) plus a `mockSteps` helper array.
-export async function runWithTools(messages, settings, params, toolNames, mocks, onStatus) {
+export async function runWithTools(messages, settings, toolNames, mocks, onStatus) {
   if (!settings?.api_key) {
     throw new Error('DeepSeek API key not set. Open Settings (gear icon) to configure it.')
   }
@@ -156,7 +171,7 @@ export async function runWithTools(messages, settings, params, toolNames, mocks,
 
   let model
   try {
-    model = createModel(settings, params)
+    model = createModel(settings)
   } catch (e) {
     throw new Error(`Failed to initialise model: ${e.message}`)
   }

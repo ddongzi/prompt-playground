@@ -1,9 +1,11 @@
 import React, { useState, useMemo, useCallback } from 'react'
 import {
-  X, Wrench, Check, ChevronDown, ChevronRight, Search, Plus, Pencil, Trash2, AlertCircle,
+  X, Wrench, Check, Search, Plus, Pencil, Trash2, AlertCircle,
+  Download, Upload, FileCode,
 } from 'lucide-react'
 import { getAllTools } from './tools'
-import { createCustomTool, updateCustomTool, deleteCustomTool } from './store'
+import { createCustomTool, updateCustomTool, deleteCustomTool, importTools, exportAllTools } from './store'
+import SCAN_TOOLS_PY from './scan-tools-script'
 
 const EMPTY_SCHEMA = JSON.stringify(
   {
@@ -15,14 +17,14 @@ const EMPTY_SCHEMA = JSON.stringify(
   2
 )
 
-// Tools modal: pick which tools (built-in + custom) to bind for this prompt,
-// optionally set mock output per tool, and manage custom tool definitions.
+// Tools modal: pick which tools to bind for this prompt,
+// optionally set mock output per tool, and manage tool definitions.
 export default function ToolsModal({ isOpen, onClose, tools, onChange }) {
   const [query, setQuery] = useState('')
-  const [expanded, setExpanded] = useState(() => new Set())
   const [version, setVersion] = useState(0)
+  const [toast, setToast] = useState(null) // { text, type: 'success'|'error' }
 
-  // Custom tool form
+  // Tool form
   const [editingId, setEditingId] = useState(null)
   const [formName, setFormName] = useState('')
   const [formDesc, setFormDesc] = useState('')
@@ -37,8 +39,8 @@ export default function ToolsModal({ isOpen, onClose, tools, onChange }) {
     if (!q) return allTools
     return allTools.filter(
       (t) =>
-        t.name.toLowerCase().includes(q) ||
-        t.description.toLowerCase().includes(q)
+        (t.name || '').toLowerCase().includes(q) ||
+        (t.description || '').toLowerCase().includes(q)
     )
   }, [query, allTools])
 
@@ -49,10 +51,6 @@ export default function ToolsModal({ isOpen, onClose, tools, onChange }) {
     setFormSchema(EMPTY_SCHEMA)
     setFormMock('{"result":"ok"}')
     setFormError('')
-  }
-
-  const openAddForm = () => {
-    if (editingId != null) resetForm()
   }
 
   const openEditForm = (t) => {
@@ -105,22 +103,79 @@ export default function ToolsModal({ isOpen, onClose, tools, onChange }) {
   }
 
   const removeTool = async (id, name) => {
-    if (!window.confirm(`Delete custom tool "${name}"?`)) return
+    if (!window.confirm(`Delete tool "${name}"?`)) return
     await deleteCustomTool(id)
-    // If currently editing this tool, reset form.
     if (editingId === id) resetForm()
-    // Also remove from current prompt's selected/mocks if selected.
     const sel = (tools?.selected || []).filter((n) => n !== name)
-    const mocks = { ...(tools?.mocks || {}) }
-    delete mocks[name]
-    onChange({ selected: sel, mocks })
+    onChange({ selected: sel, mocks: {} })
     setVersion((v) => v + 1)
   }
+
+  const handleImport = useCallback(async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const text = await file.text()
+      const parsed = JSON.parse(text)
+      const arr = Array.isArray(parsed) ? parsed : [parsed]
+      await importTools(arr)
+      setVersion((v) => v + 1)
+      setToast({ text: `Imported ${arr.length} tool(s) successfully.`, type: 'success' })
+      setTimeout(() => setToast(null), 2500)
+    } catch (err) {
+      setToast({ text: 'Invalid JSON file: ' + err.message, type: 'error' })
+      setTimeout(() => setToast(null), 3000)
+    }
+    e.target.value = ''
+  }, [])
+
+  const handleExport = useCallback(() => {
+    const data = exportAllTools()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'tools.json'
+    a.click()
+    URL.revokeObjectURL(url)
+  }, [])
+
+  const handleDownloadScript = useCallback(async () => {
+    const blob = new Blob([SCAN_TOOLS_PY], { type: 'text/x-python' })
+
+    // Prefer File System Access API for "Save As" location picker
+    if (window.showSaveFilePicker) {
+      try {
+        const handle = await window.showSaveFilePicker({
+          suggestedName: 'scan_tools.py',
+          types: [{ description: 'Python', accept: { 'text/x-python': ['.py'] } }],
+        })
+        const writable = await handle.createWritable()
+        await writable.write(blob)
+        await writable.close()
+        setToast({ text: 'scan_tools.py saved.', type: 'success' })
+        setTimeout(() => setToast(null), 2500)
+        return
+      } catch (err) {
+        if (err.name === 'AbortError') return // user cancelled
+        // fall through to fallback
+      }
+    }
+
+    // Fallback: auto-download to browser default directory
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'scan_tools.py'
+    a.click()
+    URL.revokeObjectURL(url)
+    setToast({ text: 'scan_tools.py downloaded.', type: 'success' })
+    setTimeout(() => setToast(null), 2500)
+  }, [])
 
   if (!isOpen) return null
 
   const selected = new Set(tools?.selected || [])
-  const mocks = tools?.mocks || {}
 
   const toggle = (name) => {
     const next = new Set(selected)
@@ -129,29 +184,16 @@ export default function ToolsModal({ isOpen, onClose, tools, onChange }) {
     } else {
       next.add(name)
     }
-    onChange({ selected: Array.from(next), mocks })
-  }
-
-  const setMock = (name, value) => {
-    onChange({ selected: tools?.selected || [], mocks: { ...mocks, [name]: value } })
-  }
-
-  const toggleExpand = (name) => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(name)) next.delete(name)
-      else next.add(name)
-      return next
-    })
+    onChange({ selected: Array.from(next), mocks: {} })
   }
 
   const selectAll = () =>
-    onChange({ selected: allTools.map((t) => t.name), mocks })
+    onChange({ selected: allTools.map((t) => t.name), mocks: {} })
   const clearAll = () => onChange({ selected: [], mocks: {} })
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-[2px] p-4">
-      <div className="w-full max-w-5xl bg-[var(--bg-panel)] border border-[var(--border-color)] rounded-xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+      <div className="w-full max-w-5xl bg-[var(--bg-panel)] border border-[var(--border-color)] rounded-xl shadow-2xl flex flex-col max-h-[90vh] overflow-hidden relative">
         {/* Header */}
         <div className="px-5 py-3 border-b border-[var(--border-color)] flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2">
@@ -199,10 +241,9 @@ export default function ToolsModal({ isOpen, onClose, tools, onChange }) {
             <div className="flex-1 overflow-y-auto">
               {filtered.map((t) => {
                 const on = selected.has(t.name)
-                const isOpen = expanded.has(t.name)
                 return (
                   <div
-                    key={t.name}
+                    key={t._id || t.name}
                     className={`border-b border-[var(--border-color)] ${on ? 'bg-[var(--accent-soft)]/40' : ''}`}
                   >
                     <div className="flex items-start gap-2 px-4 py-2">
@@ -217,62 +258,30 @@ export default function ToolsModal({ isOpen, onClose, tools, onChange }) {
                         {on && <Check className="w-3 h-3" />}
                       </button>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => toggleExpand(t.name)}
-                            className="flex items-center gap-1 text-xs font-mono font-semibold text-[var(--text-main)] hover:text-[var(--accent)] cursor-pointer"
-                          >
-                            {isOpen ? (
-                              <ChevronDown className="w-3 h-3" />
-                            ) : (
-                              <ChevronRight className="w-3 h-3" />
-                            )}
-                            {t.name}
-                          </button>
-                          {t._custom && (
-                            <span className="px-1 py-0.5 text-[9px] font-medium bg-purple-100 text-purple-700 rounded">
-                              custom
-                            </span>
-                          )}
-                        </div>
-                        <p className="text-[11px] text-[var(--text-muted)] leading-snug mt-0.5">
-                          {t.description}
+                        <span className="text-xs font-mono font-semibold text-[var(--text-main)]">
+                          {t.name || '(unnamed)'}
+                        </span>
+                        <p className="text-[11px] text-[var(--text-muted)] leading-snug mt-0.5 truncate">
+                          {t.description || ''}
                         </p>
                       </div>
-                      {t._custom && (
-                        <div className="flex items-center gap-0.5 shrink-0">
-                          <button
-                            onClick={() => openEditForm(t)}
-                            className="p-1 rounded text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-white cursor-pointer"
-                            title="Edit tool"
-                          >
-                            <Pencil className="w-3 h-3" />
-                          </button>
-                          <button
-                            onClick={() => removeTool(t._id, t.name)}
-                            className="p-1 rounded text-[var(--text-muted)] hover:text-red-600 hover:bg-white cursor-pointer"
-                            title="Delete tool"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                    {isOpen && (
-                      <div className="px-4 pb-2 pl-10">
-                        <label className="text-[10px] uppercase tracking-wider text-[var(--text-faint)] font-semibold">
-                          Mock output (empty = auto-echo args)
-                        </label>
-                        <textarea
-                          value={mocks[t.name] || ''}
-                          onChange={(e) => setMock(t.name, e.target.value)}
-                          spellCheck={false}
-                          rows={3}
-                          placeholder={`e.g. {\n  "path": "src/index.ts",\n  "content": "export const x = 1"\n}`}
-                          className="mt-1 w-full p-2 text-[11px] font-mono bg-[var(--bg-soft)] border border-[var(--border-color)] rounded focus:outline-none focus:border-[var(--accent)] resize-y"
-                        />
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <button
+                          onClick={() => openEditForm(t)}
+                          className="p-1 rounded text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-white cursor-pointer"
+                          title="Edit tool"
+                        >
+                          <Pencil className="w-3 h-3" />
+                        </button>
+                        <button
+                          onClick={() => removeTool(t._id, t.name)}
+                          className="p-1 rounded text-[var(--text-muted)] hover:text-red-600 hover:bg-white cursor-pointer"
+                          title="Delete tool"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
                       </div>
-                    )}
+                    </div>
                   </div>
                 )
               })}
@@ -282,22 +291,24 @@ export default function ToolsModal({ isOpen, onClose, tools, onChange }) {
                 </div>
               )}
             </div>
+
+            {/* Add tool button at bottom of list */}
+            <div className="px-4 py-2 border-t border-[var(--border-color)] shrink-0">
+              <button
+                onClick={resetForm}
+                className="w-full flex items-center justify-center gap-1.5 py-1.5 text-[11px] text-[var(--text-muted)] hover:text-[var(--accent)] hover:bg-white rounded-lg cursor-pointer border border-dashed border-[var(--border-color)]"
+              >
+                <Plus className="w-3.5 h-3.5" /> Add tool
+              </button>
+            </div>
           </div>
 
           {/* Right: add / edit form */}
           <div className="w-1/2 flex flex-col bg-[var(--bg-soft)]/50 min-w-0">
-            <div className="px-4 py-2.5 border-b border-[var(--border-color)] flex items-center justify-between shrink-0">
+            <div className="px-4 py-2.5 border-b border-[var(--border-color)] flex items-center shrink-0">
               <span className="text-xs font-semibold text-[var(--text-main)]">
-                {editingId ? 'Edit custom tool' : 'Add custom tool'}
+                {editingId ? 'Edit tool' : 'Add tool'}
               </span>
-              {editingId != null && (
-                <button
-                  onClick={resetForm}
-                  className="text-[11px] text-[var(--text-muted)] hover:text-[var(--accent)] cursor-pointer"
-                >
-                  + New
-                </button>
-              )}
             </div>
             <div className="flex-1 overflow-y-auto p-4 space-y-3">
               <div>
@@ -362,17 +373,45 @@ export default function ToolsModal({ isOpen, onClose, tools, onChange }) {
                   </button>
                 )}
               </div>
+
+
             </div>
           </div>
         </div>
 
+        {/* Toast */}
+        {toast && (
+          <div className={`absolute bottom-14 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded text-[11px] shadow-lg transition-all
+            ${toast.type === 'success' ? 'bg-green-700 text-white' : 'bg-red-700 text-white'}`}>
+            {toast.text}
+          </div>
+        )}
+
         {/* Footer */}
         <div className="px-4 py-2.5 border-t border-[var(--border-color)] flex items-center justify-between shrink-0">
-          <span className="text-[10px] text-[var(--text-faint)]">
-            {selected.size === 0
-              ? 'No tools bound — plain chat run.'
-              : `${selected.size} tool${selected.size === 1 ? '' : 's'} bound. Run prompt → single-shot observation.`}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-[10px] text-[var(--text-faint)]">
+              {selected.size === 0
+                ? 'No tools bound — plain chat run.'
+                : `${selected.size} tool${selected.size === 1 ? '' : 's'} bound. Run prompt → single-shot observation.`}
+            </span>
+            <div className="h-3 w-px bg-[var(--border-color)]" />
+            <label className="btn btn-ghost text-[11px] flex items-center gap-1 cursor-pointer">
+              <Upload className="w-3 h-3" /> Import JSON
+              <input
+                type="file"
+                accept=".json,.jsonl"
+                onChange={handleImport}
+                className="hidden"
+              />
+            </label>
+            <button onClick={handleExport} className="btn btn-ghost text-[11px] flex items-center gap-1">
+              <Download className="w-3 h-3" /> Export
+            </button>
+            <button onClick={handleDownloadScript} className="btn btn-ghost text-[11px] flex items-center gap-1">
+              <FileCode className="w-3 h-3" /> scan_tools.py
+            </button>
+          </div>
           <button onClick={onClose} className="btn btn-primary">
             Done
           </button>

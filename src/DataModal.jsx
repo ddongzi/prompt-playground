@@ -2,8 +2,6 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import {
   X,
   Save,
-  Download,
-  Upload,
   Database,
   AlertCircle,
   Check,
@@ -15,6 +13,8 @@ import {
   List,
   Search,
   Copy,
+  Package,
+  PackageOpen,
 } from 'lucide-react'
 import * as store from './store'
 
@@ -178,7 +178,8 @@ export default function DataModal({ isOpen, onClose, onChanged }) {
   const [copied, setCopied] = useState(false)
   const [records, setRecords] = useState([])
   const [search, setSearch] = useState('')
-  const fileInputRef = useRef(null)
+  const importAllRef = useRef(null)
+  const [bundleMsg, setBundleMsg] = useState('')
 
   const entity = useMemo(
     () => store.ENTITIES.find((e) => e.key === activeKey),
@@ -273,12 +274,10 @@ export default function DataModal({ isOpen, onClose, onChanged }) {
     } catch {}
   }
 
-  const handleExport = () => {
-    store.downloadText(entity.file, text)
-  }
-
   const handleExportAll = () => {
-    for (const f of store.exportData()) store.downloadText(f.filename, f.content)
+    const bundle = store.exportAllBundled()
+    const json = JSON.stringify(bundle, null, 2)
+    store.downloadText('prompt-playground-backup.json', json)
   }
 
   const handleReload = () => {
@@ -286,32 +285,27 @@ export default function DataModal({ isOpen, onClose, onChanged }) {
     load(activeKey)
   }
 
-  const handleImportClick = () => fileInputRef.current?.click()
-
-  const handleImportFile = async (e) => {
+  const handleImportAll = async (e) => {
     const file = e.target.files?.[0]
     if (!file) return
     const t = await file.text()
-    const err = store.validateEntity(activeKey, t)
-    if (err) {
-      setError(`Import rejected — ${err}`)
-      e.target.value = ''
+    const result = store.importAllBundled(t)
+    e.target.value = ''
+    if (!result.ok) {
+      setBundleMsg(`Import failed: ${result.error}`)
+      setTimeout(() => setBundleMsg(''), 4000)
       return
     }
-    store.setEntityRaw(activeKey, t)
-    setText(t)
-    setDirty(false)
-    setMode('cards')
-    try {
-      setRecords(store.readEntityRecords(activeKey))
-    } catch {
-      setRecords(activeKey === 'settings' ? {} : [])
-    }
-    setSelectedId(null)
-    setSearch('')
-    setSaved(true)
-    setTimeout(() => setSaved(false), 1500)
-    e.target.value = ''
+    const r = result.results
+    const parts = []
+    if (r.groups) parts.push(`${r.groups} groups`)
+    if (r.prompts) parts.push(`${r.prompts} prompts`)
+    if (r.runs) parts.push(`${r.runs} runs`)
+    if (r.settings) parts.push('settings')
+    if (r.tools) parts.push(`${r.tools} tools`)
+    setBundleMsg(`Imported: ${parts.join(', ')}`)
+    setTimeout(() => setBundleMsg(''), 4000)
+    load(activeKey)
     if (onChanged) onChanged()
   }
 
@@ -431,25 +425,12 @@ export default function DataModal({ isOpen, onClose, onChanged }) {
             <button onClick={handleReload} className="btn btn-ghost" title="Reload from storage">
               <RefreshCw className="w-3.5 h-3.5" />
             </button>
-            <button onClick={handleImportClick} className="btn btn-outline">
-              <Upload className="w-3.5 h-3.5" /> Import
-            </button>
-            <button onClick={handleExport} className="btn btn-outline">
-              <Download className="w-3.5 h-3.5" /> Export
-            </button>
             {mode === 'raw' && (
               <button onClick={handleSave} disabled={!dirty} className="btn btn-primary">
                 <Save className="w-3.5 h-3.5" /> Save
               </button>
             )}
           </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept=".jsonl,.json"
-            onChange={handleImportFile}
-            className="hidden"
-          />
         </div>
 
         {/* Error */}
@@ -525,18 +506,32 @@ export default function DataModal({ isOpen, onClose, onChanged }) {
         {/* Footer */}
         <div className="px-4 py-2.5 border-t border-[var(--border-color)] flex items-center justify-between gap-2">
           <span className="text-[10px] text-[var(--text-faint)]">
-            {mode === 'cards'
+            {bundleMsg ? (
+              <span className={bundleMsg.startsWith('Import failed') ? 'text-red-600' : 'text-emerald-600'}>
+                {bundleMsg}
+              </span>
+            ) : mode === 'cards'
               ? 'Click a record to expand its JSON. Delete removes it permanently.'
               : 'Raw editor — validate, then save to persist.'}
           </span>
           <div className="flex gap-2">
+            <button onClick={() => importAllRef.current?.click()} className="btn btn-outline">
+              <PackageOpen className="w-3.5 h-3.5" /> Import all
+            </button>
             <button onClick={handleExportAll} className="btn btn-outline">
-              <Download className="w-3.5 h-3.5" /> Export all (4 files)
+              <Package className="w-3.5 h-3.5" /> Export all
             </button>
             <button onClick={handleClose} className="btn btn-outline">
               Close
             </button>
           </div>
+          <input
+            ref={importAllRef}
+            type="file"
+            accept=".json"
+            onChange={handleImportAll}
+            className="hidden"
+          />
         </div>
       </div>
     </div>

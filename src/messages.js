@@ -1,5 +1,5 @@
-// Normalize a Python-exported LangChain message list into our internal format:
-//   { type: 'system'|'human'|'ai'|'tool', content: string, tool_call_id?: string }
+// Normalize a Python-exported LangChain message list into the native format:
+//   { type: 'system'|'human'|'ai'|'tool', data: { content: string, tool_call_id?: string, name?: string, tool_calls?: [...] } }
 //
 // Accepts several shapes the user might paste from Python:
 //   1) JSON array of flat dicts (m.model_dump()):
@@ -7,6 +7,7 @@
 //   2) {"messages": [...]}  (messages_to_dict style, flat dicts)
 //   3) {"messages": [{"lc":1,"type":"constructor","id":[...,"HumanMessage"],"kwargs":{...}}, ...]}  (messages_to_json)
 //   4) OpenAI-style: [{"role":"user","content":"..."}, ...]
+//   5) Native data-wrapped: [{"type":"human","data":{"content":"...",...}}]
 
 const TYPE_MAP = {
   // python model_dump `type` values / OpenAI `role`
@@ -79,16 +80,19 @@ function fromFlat(d) {
   const src = d.data && typeof d.data === 'object' ? d.data : d
   const rawType = d.type || src.type || src.role || src._type
   const outType = TYPE_MAP[rawType] || 'human'
-  const m = { type: outType, content: extractText(src.content) }
+
+  // Preserve the original data object, normalizing a handful of critical fields.
+  const dataObj = { ...src, content: extractText(src.content) }
+  dataObj.type = outType
+
   if (outType === 'tool') {
-    if (src.tool_call_id != null) m.tool_call_id = String(src.tool_call_id)
-    if (src.name) m.name = src.name
+    if (src.tool_call_id != null) dataObj.tool_call_id = String(src.tool_call_id)
   }
   if (outType === 'ai') {
     const tcs = normalizeToolCalls(src.tool_calls)
-    if (tcs) m.tool_calls = tcs
+    if (tcs) dataObj.tool_calls = tcs
   }
-  return m
+  return { type: outType, data: dataObj }
 }
 
 function fromLc(obj) {
@@ -96,21 +100,21 @@ function fromLc(obj) {
   const id = Array.isArray(obj.id) ? obj.id[obj.id.length - 1] : null
   const kw = obj.kwargs || {}
   const outType = TYPE_MAP[id] || 'human'
-  const m = { type: outType, content: extractText(kw.content) }
+  const dataObj = { content: extractText(kw.content) }
   if (outType === 'tool') {
-    if (kw.tool_call_id != null) m.tool_call_id = String(kw.tool_call_id)
-    if (kw.name) m.name = kw.name
+    if (kw.tool_call_id != null) dataObj.tool_call_id = String(kw.tool_call_id)
+    if (kw.name) dataObj.name = kw.name
   }
   if (outType === 'ai') {
     const tcs = normalizeToolCalls(kw.tool_calls)
-    if (tcs) m.tool_calls = tcs
+    if (tcs) dataObj.tool_calls = tcs
   }
-  return m
+  return { type: outType, data: dataObj }
 }
 
 function normalizeItem(item) {
   if (item == null) return null
-  if (typeof item === 'string') return { type: 'human', content: item }
+  if (typeof item === 'string') return { type: 'human', data: { content: item } }
   if (typeof item !== 'object') return null
   // lc-serialized constructor form?
   if (item.lc === 1 || (item.type === 'constructor' && item.kwargs)) {

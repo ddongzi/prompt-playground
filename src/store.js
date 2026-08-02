@@ -6,6 +6,9 @@
 //
 // "Storage uses JSONL": the on-disk format you get via exportData() is real
 // .jsonl files. importFile() reads them back. Local use only — the API key
+// stays in your browser.
+
+import DEFAULT_TOOLS from './default-tools'
 // lives in localStorage alongside the data; that's fine for a local app.
 
 const KEYS = {
@@ -20,8 +23,6 @@ const DEFAULT_SETTINGS = {
   api_key: '',
   base_url: 'https://api.deepseek.com/v1',
   model: 'deepseek-chat',
-  temperature: 0,
-  max_tokens: 2048,
 }
 
 // ---------- low-level jsonl helpers ----------
@@ -270,6 +271,49 @@ export function deleteCustomTool(id) {
   return true
 }
 
+/* ----------- tool seeding / import / export ----------- */
+
+export async function seedDefaultTools() {
+  const existing = readJsonl(KEYS.tools)
+  if (existing.length > 0) return false
+  const records = DEFAULT_TOOLS.map((t) => ({
+    id: newId('tool'),
+    name: t.name,
+    description: t.description,
+    schema: t.schema,
+    mock_output: t.mock_output || '',
+    created_at: now(),
+  }))
+  writeJsonl(KEYS.tools, records)
+  return true
+}
+
+export async function importTools(toolsArray) {
+  const existing = readJsonl(KEYS.tools)
+  for (const t of toolsArray) {
+    if (!t.name) continue
+    const idx = existing.findIndex((e) => e.name === t.name)
+    const rec = {
+      id: idx >= 0 ? existing[idx].id : newId('tool'),
+      name: t.name,
+      description: t.description || '',
+      schema: t.schema || {},
+      mock_output: t.mock_output || '',
+      created_at: now(),
+    }
+    if (idx >= 0) {
+      existing[idx] = rec
+    } else {
+      existing.push(rec)
+    }
+  }
+  writeJsonl(KEYS.tools, existing)
+}
+
+export function exportAllTools() {
+  return listCustomTools()
+}
+
 export async function updateRunFeedback(id, feedback) {
   const runs = readJsonl(KEYS.runs)
   let updated = null
@@ -334,6 +378,72 @@ export function downloadText(filename, content) {
   a.click()
   document.body.removeChild(a)
   setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+// ---------- bundled export / import ----------
+
+export function exportAllBundled() {
+  const settings = JSON.parse(localStorage.getItem(KEYS.settings) || '{}')
+  // Mask API key and strip derived fields to avoid leaking secrets
+  settings.api_key = ''
+  delete settings.has_api_key
+  delete settings.api_key_masked
+
+  const bundle = {
+    version: 1,
+    exported_at: now(),
+    data: {
+      groups: readJsonl(KEYS.groups),
+      prompts: readJsonl(KEYS.prompts),
+      runs: readJsonl(KEYS.runs),
+      settings,
+      tools: readJsonl(KEYS.tools),
+    },
+  }
+  return bundle
+}
+
+export function importAllBundled(jsonText) {
+  let bundle
+  try {
+    bundle = JSON.parse(jsonText)
+  } catch (e) {
+    return { ok: false, error: `Invalid JSON: ${e.message}` }
+  }
+
+  if (!bundle || typeof bundle !== 'object') {
+    return { ok: false, error: 'Not a valid bundle — expected a JSON object' }
+  }
+
+  const data = bundle.data
+  if (!data || typeof data !== 'object') {
+    return { ok: false, error: 'Bundle missing "data" field' }
+  }
+
+  const results = { groups: 0, prompts: 0, runs: 0, settings: false, tools: 0 }
+
+  if (Array.isArray(data.groups)) {
+    writeJsonl(KEYS.groups, data.groups)
+    results.groups = data.groups.length
+  }
+  if (Array.isArray(data.prompts)) {
+    writeJsonl(KEYS.prompts, data.prompts)
+    results.prompts = data.prompts.length
+  }
+  if (Array.isArray(data.runs)) {
+    writeJsonl(KEYS.runs, data.runs)
+    results.runs = data.runs.length
+  }
+  if (data.settings && typeof data.settings === 'object') {
+    localStorage.setItem(KEYS.settings, JSON.stringify(data.settings, null, 2))
+    results.settings = true
+  }
+  if (Array.isArray(data.tools)) {
+    writeJsonl(KEYS.tools, data.tools)
+    results.tools = data.tools.length
+  }
+
+  return { ok: true, results }
 }
 
 // ---------- raw entity access (for the data manager UI) ----------

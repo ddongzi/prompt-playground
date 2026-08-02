@@ -5,7 +5,6 @@ import {
   KeyRound,
   Server,
   Bot,
-  SlidersHorizontal,
   Eye,
   EyeOff,
 } from 'lucide-react'
@@ -15,8 +14,6 @@ export default function SettingsModal({ isOpen, onClose, settings, onSave }) {
     api_key: '',
     base_url: 'https://api.deepseek.com/v1',
     model: 'deepseek-chat',
-    temperature: 0,
-    max_tokens: 2048,
   })
   const [showKey, setShowKey] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -28,8 +25,6 @@ export default function SettingsModal({ isOpen, onClose, settings, onSave }) {
         api_key: '', // always blank; sending blank means "keep existing"
         base_url: settings.base_url ?? 'https://api.deepseek.com/v1',
         model: settings.model ?? 'deepseek-chat',
-        temperature: settings.temperature ?? 0,
-        max_tokens: settings.max_tokens ?? 2048,
       })
       setError('')
     }
@@ -139,39 +134,6 @@ export default function SettingsModal({ isOpen, onClose, settings, onSave }) {
               DeepSeek models: <span className="font-mono">deepseek-chat</span>,{' '}
               <span className="font-mono">deepseek-reasoner</span>.
             </p>
-          </div>
-
-          {/* Default params */}
-          <div className="space-y-2">
-            <label className="flex items-center gap-1.5 font-semibold text-[var(--text-main)]">
-              <SlidersHorizontal className="w-3.5 h-3.5 text-[var(--accent)]" /> Default params
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-[11px] text-[var(--text-muted)] mb-1">Temperature</label>
-                <input
-                  type="number"
-                  min="0"
-                  max="2"
-                  step="0.05"
-                  value={form.temperature}
-                  onChange={(e) => handle('temperature', parseFloat(e.target.value))}
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1.5 font-mono focus:outline-none focus:border-[var(--accent)]"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] text-[var(--text-muted)] mb-1">Max tokens</label>
-                <input
-                  type="number"
-                  min="256"
-                  max="32768"
-                  step="256"
-                  value={form.max_tokens}
-                  onChange={(e) => handle('max_tokens', parseInt(e.target.value, 10))}
-                  className="w-full bg-[var(--bg-input)] border border-[var(--border-color)] rounded px-2 py-1.5 font-mono focus:outline-none focus:border-[var(--accent)]"
-                />
-              </div>
-            </div>
           </div>
 
           {error && (
