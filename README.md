@@ -2,6 +2,8 @@
 
 一个纯前端的 LLM Prompt 调试工作台。编写多轮消息对话，对接 DeepSeek API 实时测试，观察工具调用（Tool Calling）行为并迭代优化。所有数据存储于浏览器 localStorage，无需后端。
 
+![alt text](image.png)
+
 ## 功能
 
 - **多轮消息编辑器** — 支持 system、human、ai、tool 四种角色，可自由增删排序
